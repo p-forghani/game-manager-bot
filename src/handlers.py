@@ -33,15 +33,16 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         session.close()
         return
-    logger.info(f"Message entities: {entities}")
+    chat_id = update.effective_chat.id
 
     for entity in entities:
         if entity.type == MessageEntityType.TEXT_MENTION:
             player = session.query(Player).filter_by(
-                telegram_id=entity.user.id).first()
+                telegram_id=entity.user.id, chat_id=chat_id).first()
         elif entity.type == MessageEntityType.MENTION:
             username = text[entity.offset + 1: entity.offset + entity.length]
-            player = session.query(Player).filter_by(username=username).first()
+            player = session.query(Player).filter_by(
+                username=username, chat_id=chat_id).first()
         else:
             continue
 
@@ -65,7 +66,10 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Step 4: Save the game record
     game = Game(
-        winner_id=winner_user.id, loser_id=loser_user.id, date=msg_date_local)
+        winner_id=winner_user.id,
+        loser_id=loser_user.id,
+        date=msg_date_local,
+        chat_id=chat_id)
     session.add(game)
     session.commit()
 
@@ -98,10 +102,12 @@ async def add_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.close()
         return
 
+    chat_id = update.effective_chat.id
     player = Player(
         telegram_id=user.id,
         username=user.username,
         first_name=user.first_name,
+        chat_id=chat_id
     )
 
     session.add(player)
@@ -136,7 +142,8 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ):
         is_today = True
 
-    players = session.query(Player).all()
+    chat_id = update.effective_chat.id
+    players = session.query(Player).filter_by(chat_id=chat_id).all()
     if not players:
         await update.message.reply_text("No players found.")
         session.close()
