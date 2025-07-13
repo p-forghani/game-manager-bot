@@ -5,4 +5,4 @@ def with_emoji(text: str) -> str:
     """
     Convert text to emoji representation.
     """
-    return emojize(text)
+    return emojize(text, language='alias')

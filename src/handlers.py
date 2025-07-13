@@ -12,14 +12,41 @@ from src.db import SessionLocal
 from src.logging_config import logger
 from src.models import Game, Player
 from src.utils import with_emoji
+import traceback
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command."""
     await update.message.reply_text(
-        with_emoji(":wave: Hello! I'm the Game Manager Bot. "
-                   "type / to see suggested commands")
+        with_emoji(
+            ":wave: *Welcome to the Game Manager Bot\\!*\n\n"
+            "Track your group’s daily games, wins, and rankings — all "
+            "automatically\\.\n\n"
+            "Type /help to learn how to use the bot\\."),
+        parse_mode="MarkdownV2"
     )
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = with_emoji(
+        "*:book: How to Use the Game Manager Bot:*\n\n"
+
+        "*:white_check_mark: 1\\. Register Yourself \\(one\\-time\\):*\n"
+        "`/add_me`\n"
+        "You *must* register before using other commands\\.\n\n"
+
+        "*:video_game: 2\\. Record a Game:*\n"
+        "`/played @winner @loser \\[yyyy\\-mm\\-dd\\]`\n"
+        "Example: `/played @alice @bob 2025\\-07\\-13`\n"
+        "Date is optional \\- defaults to today\\.\n\n"
+
+        "*:bar_chart: 3\\. Check Rankings:*\n"
+        "`/rank \\[yyyy\\-mm\\-dd | today\\]`\n"
+        "Use `/rank today` for today\\'s results\\.\n"
+        "Use `/rank` \\(with no date\\) for all\\-time rankings\\.\n\n"
+
+        "*:man_technologist: Developer:* @pouriaf99"
+    )
+    await update.message.reply_text(message, parse_mode="MarkdownV2")
 
 
 async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -76,7 +103,7 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Invalid date format. Use YYYY-MM-DD."
             )
             return
-    if game_date:
+    if not game_date:
         msg_date_utc = update.message.date
         timezone = pytz.timezone("Asia/Tehran")
         game_date = msg_date_utc.astimezone(timezone).date()
@@ -216,14 +243,24 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session.close()
 
 
-# TODO: Register this error handler in the bot factory
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle errors in the bot."""
-    logger.error(f"Update {update} caused error {context.error}")
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text="An error occurred. Please try again later."
+async def error_handler(
+        update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle errors and log exception details."""
+    logger.error("Exception occurred:", exc_info=context.error)
+
+    if isinstance(update, Update) and getattr(update, "message", None):
+        await update.message.reply_text(
+            with_emoji(
+                ":warning: Something went wrong. "
+                "The developers have been notified.")
+        )
+
+    traceback_str = ''.join(
+        traceback.format_exception(
+            None, context.error, context.error.__traceback__
+        )
     )
+    logger.debug("Traceback details:\n%s", traceback_str)
 
 
 async def handle_delete_button(

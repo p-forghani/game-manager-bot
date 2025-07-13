@@ -33,6 +33,7 @@ class Game(Base):
     id = Column(Integer, primary_key=True)
     winner_id = Column(Integer, ForeignKey('players.id'))
     loser_id = Column(Integer, ForeignKey('players.id'))
+    # TODO: Remove the default arg from the date
     date = Column(Date, default=datetime.date.today)
     chat_id = Column(Integer, nullable=False)
 
