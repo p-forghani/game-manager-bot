@@ -1,9 +1,11 @@
 import os
 
 from dotenv import load_dotenv
-from telegram.ext import ApplicationBuilder, CommandHandler
+from telegram.ext import (ApplicationBuilder, CallbackQueryHandler,
+                          CommandHandler)
 
-from src.handlers import start, played, add_me, ranking, error_handler
+from src.handlers import (add_me, played, ranking,
+                          start, handle_delete_button)
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
@@ -19,5 +21,7 @@ def app_factory(token=TOKEN):
     app.add_handler(CommandHandler("played", played))
     app.add_handler(CommandHandler("add_me", add_me))
     app.add_handler(CommandHandler("rank", ranking))
+    app.add_handler(CallbackQueryHandler(
+        handle_delete_button, pattern="^delete_game:"))
 
     return app

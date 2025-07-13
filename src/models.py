@@ -1,7 +1,6 @@
 import datetime
 
-from sqlalchemy import (Column, Date, ForeignKey, Integer, String,
-                        UniqueConstraint)
+from sqlalchemy import (Column, Date, ForeignKey, Integer, String)
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -14,7 +13,6 @@ class Player(Base):
     first_name = Column(String)
     telegram_id = Column(Integer, unique=True)
     username = Column(String, nullable=True)
-    chat_id = Column(Integer, nullable=False)
 
     # For easy access to games
     games_won = relationship(
@@ -26,11 +24,6 @@ class Player(Base):
         "Game",
         back_populates="loser",
         foreign_keys='Game.loser_id'
-    )
-
-    __table_args__ = (
-        UniqueConstraint(
-            'telegram_id', 'chat_id', name='unique_player_per_group'),
     )
 
 
@@ -54,3 +47,5 @@ class Game(Base):
         foreign_keys=[loser_id],
         back_populates="games_lost"
     )
+
+# TODO: Add the Chat model

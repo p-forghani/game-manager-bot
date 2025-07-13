@@ -1,6 +1,10 @@
+from datetime import datetime
+from src.functions import calculate_ranking
+
+import re
 import pytz
 from sqlalchemy.exc import IntegrityError
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import MessageEntityType
 from telegram.ext import ContextTypes
 
@@ -8,7 +12,6 @@ from src.db import SessionLocal
 from src.logging_config import logger
 from src.models import Game, Player
 from src.utils import with_emoji
-from datetime import datetime
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -38,11 +41,11 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for entity in entities:
         if entity.type == MessageEntityType.TEXT_MENTION:
             player = session.query(Player).filter_by(
-                telegram_id=entity.user.id, chat_id=chat_id).first()
+                telegram_id=entity.user.id).first()
         elif entity.type == MessageEntityType.MENTION:
             username = text[entity.offset + 1: entity.offset + entity.length]
             player = session.query(Player).filter_by(
-                username=username, chat_id=chat_id).first()
+                username=username).first()
         else:
             continue
 
@@ -59,27 +62,48 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             loser_user = player
 
-    # Step 2: Convert message date to local date
-    msg_date_utc = update.message.date
-    timezone = pytz.timezone("Asia/Tehran")
-    msg_date_local = msg_date_utc.astimezone(timezone).date()
+    # If date is provided in the message set it, otherwise use the message date
+    game_date = None
+    pattern = r"^\d{4}-\d{2}-\d{2}$"
+    if (
+        context.args
+        and len(context.args) > 2
+    ):
+        if re.match(pattern, context.args[0]):
+            game_date = datetime.strptime(context.args[0], "%Y-%m-%d").date()
+        else:
+            await update.message.reply_text(
+                "Invalid date format. Use YYYY-MM-DD."
+            )
+            return
+    if game_date:
+        msg_date_utc = update.message.date
+        timezone = pytz.timezone("Asia/Tehran")
+        game_date = msg_date_utc.astimezone(timezone).date()
 
     # Step 4: Save the game record
     game = Game(
         winner_id=winner_user.id,
         loser_id=loser_user.id,
-        date=msg_date_local,
+        date=game_date,
         chat_id=chat_id)
     session.add(game)
     session.commit()
 
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            text="🗑️ Delete this game",
+            callback_data=f"delete_game:{game.id}"
+        )
+    ]])
+
     await update.message.reply_text(
-        # TODO: Add delete button to this message.
         f"Game with ID {game.id} recorded successfully!\n"
         f"Recorded: {winner_user.first_name} won "
         f"against <b>{loser_user.first_name}</b> "
-        f"on {msg_date_local}",
-        parse_mode="HTML"
+        f"on {game_date}",
+        parse_mode="HTML",
+        reply_markup=keyboard,
     )
     session.close()
 
@@ -102,12 +126,10 @@ async def add_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.close()
         return
 
-    chat_id = update.effective_chat.id
     player = Player(
         telegram_id=user.id,
         username=user.username,
         first_name=user.first_name,
-        chat_id=chat_id
     )
 
     session.add(player)
@@ -124,7 +146,7 @@ async def add_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.rollback()
     except Exception as e:
         logger.error("Failed to add player", exc_info=e)
-        await update.message.reply_text("Something went wrong.")
+        await update.message.reply_text("Something went wrong. Try again")
         session.rollback()
     finally:
         session.close()
@@ -133,57 +155,50 @@ async def add_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = SessionLocal()
 
-    # Check if user requested today's ranking
-    is_today = False
+    pattern = r"^\d{4}-\d{2}-\d{2}$"
+    date = None
     if (
         context.args
         and len(context.args) > 0
-        and context.args[0].lower() == "today"
     ):
-        is_today = True
+        if context.args[0].lower() == "today":
+            date = datetime.now(pytz.timezone("Asia/Tehran")).date()
+        elif re.match(pattern, context.args[0]):
+            date = datetime.strptime(context.args[0], "%Y-%m-%d").date()
+        else:
+            await update.message.reply_text(
+                "Invalid date format. Use YYYY-MM-DD or 'today'."
+            )
+            return
 
     chat_id = update.effective_chat.id
-    players = session.query(Player).filter_by(chat_id=chat_id).all()
-    if not players:
-        await update.message.reply_text("No players found.")
+
+    players_with_ratio = sorted(
+        [
+            (p, r)
+            for p, r in calculate_ranking(session, chat_id, date)
+            if (p.games_won or p.games_lost)
+        ],
+        key=lambda x: x[1],
+        reverse=True
+    )
+
+    if len(players_with_ratio) == 0:
+        await update.message.reply_text(
+            with_emoji(":no_entry: No games played yet in this chat.")
+        )
         session.close()
         return
 
-    players_ranking = []
-
-    for player in players:
-        if is_today:
-            # Get today's date in Asia/Tehran timezone
-            timezone = pytz.timezone("Asia/Tehran")
-            today = datetime.now(timezone).date()
-            # Filter games played today
-            games_won_today = [
-                g for g in player.games_won if g.date == today]
-            games_lost_today = [
-                g for g in player.games_lost if g.date == today]
-            total_games = len(games_won_today) + len(games_lost_today)
-            score = (
-                len(games_won_today) / total_games
-                ) * 100 if total_games > 0 else 0
-        else:
-            games_won = player.games_won or []
-            games_lost = player.games_lost or []
-            total_games = len(games_won) + len(games_lost)
-            score = (
-                len(games_won) / total_games
-                ) * 100 if total_games > 0 else 0
-        players_ranking.append((player, score))
-
-    players_ranking.sort(key=lambda x: x[1], reverse=True)
-
-    if is_today:
+    if date:
         ranking_message = with_emoji(
-            ":trophy: <b>Today's Champions Are Here!</b> :sparkles:\n\n")
+            f":trophy: <b>{date} Champions Are Here!</b> :sparkles:\n\n")
     else:
         ranking_message = with_emoji(
             ":trophy: <b>All-Time Champions Are Here!</b> :sparkles:\n\n")
+    # sample player = (Player object, score)
 
-    for idx, (player, score) in enumerate(players_ranking, start=1):
+    for idx, (player, score) in enumerate(players_with_ratio, start=1):
         medals = [
             ":1st_place_medal:",
             ":2nd_place_medal:",
@@ -192,7 +207,7 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
         medal = with_emoji(medals[idx-1] if idx <= 3 else ":dart:")
         ranking_message += with_emoji(
             f"{medal} <b>{idx}. {player.first_name}</b> "
-            f"— <i>Score (out of 100):</i> {score:.2f}%\n"
+            f"— <i>Win Ratio:</i> {score:.2f}%\n"
         )
 
     ranking_message += with_emoji(
@@ -209,3 +224,23 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id=update.effective_chat.id,
         text="An error occurred. Please try again later."
     )
+
+
+async def handle_delete_button(
+        update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    chat_id = query.message.chat_id
+    game_id = int(query.data.split(":")[1])
+
+    session = SessionLocal()
+    game = session.query(Game).filter_by(id=game_id, chat_id=chat_id).first()
+
+    if not game:
+        await query.edit_message_text(with_emoji(":x: Game not found."))
+        return
+
+    session.delete(game)
+    session.commit()
+    await query.edit_message_text(with_emoji(":wastebasket: Game deleted."))
