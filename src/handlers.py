@@ -103,8 +103,8 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.args
         and len(context.args) > 2
     ):
-        if re.match(pattern, context.args[0]):
-            game_date = datetime.strptime(context.args[0], "%Y-%m-%d").date()
+        if re.match(pattern, context.args[2]):
+            game_date = datetime.strptime(context.args[2], "%Y-%m-%d").date()
         else:
             await update.message.reply_text(
                 "Invalid date format. Use YYYY-MM-DD."
