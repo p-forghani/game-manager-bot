@@ -77,10 +77,17 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
             continue
 
         if not player:
-            await update.message.reply_text(
-                f"Player {entity.user.first_name} not found. "
-                "Ask them to send /add_me first."
-            )
+            if entity.type == MessageEntityType.TEXT_MENTION:
+                await update.message.reply_text(
+                    f"Player {entity.user.first_name} not found. "
+                    "Ask them to send /add_me first."
+                )
+            elif entity.type == MessageEntityType.MENTION:
+                mentioned_text = text[entity.offset: entity.offset + entity.length]
+                await update.message.reply_text(
+                    f"Player @{mentioned_text} not found. "
+                    "Ask them to send /add_me first."
+                )
             session.close()
             return
 
@@ -148,10 +155,22 @@ async def add_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
         telegram_id=user.id).first()
 
     if existing_player:
-        await update.message.reply_text(
-            "You're already registered as a player!")
-        session.close()
-        return
+        # Update existing player's info
+        setattr(existing_player, "username", user.username or None)
+        setattr(existing_player, "first_name", user.first_name or None)
+        try:
+            session.commit()
+            await update.message.reply_text(
+                "Your information has been updated!"
+            )
+            logger.info(f"Player updated: {user.id} - {user.first_name}")
+        except Exception as e:
+            logger.error("Failed to update player", exc_info=e)
+            await update.message.reply_text("Something went wrong. Try again")
+            session.rollback()
+        finally:
+            session.close()
+            return
 
     player = Player(
         telegram_id=user.id,
