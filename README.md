@@ -34,6 +34,7 @@ Telegram bot to manage games, keeps scores between a group
    Create a file named `.env` in the project root with this content:
    ```
    BOT_TOKEN=your-telegram-bot-token-here
+   DEVELOPER_ID=The Telegram ID of the developer (For error reports) [Optional]
    ```
 
 6. **Run the bot**  

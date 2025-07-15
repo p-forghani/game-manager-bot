@@ -1,48 +1,38 @@
-from sqlalchemy import func, case, cast, Float
-from sqlalchemy.orm import aliased
+from sqlalchemy import func, cast, Float
 from src.models import Player, Game
 
 
 def calculate_ranking(session, chat_id, date=None):
-    WinGame = aliased(Game)
-    LossGame = aliased(Game)
+    # Subquery for wins
+    win_query = session.query(
+        Game.winner_id.label("player_id"),
+        func.count(Game.id).label("wins")
+    ).filter(Game.chat_id == chat_id)
+    if date:
+        win_query = win_query.filter(Game.date == date)
+    win_query = win_query.group_by(Game.winner_id).subquery()
 
-    wins = func.count(WinGame.id)
-    losses = func.count(LossGame.id)
-    total_games = wins + losses
+    # Subquery for losses
+    loss_query = session.query(
+        Game.loser_id.label("player_id"),
+        func.count(Game.id).label("losses")
+    ).filter(Game.chat_id == chat_id)
+    if date:
+        loss_query = loss_query.filter(Game.date == date)
+    loss_query = loss_query.group_by(Game.loser_id).subquery()
 
-    win_ratio = case(
-        (total_games != 0, cast(wins, Float) / total_games),
-        else_=None
-    )
-
+    # Join Player with wins and losses subqueries
     query = session.query(
         Player,
-        win_ratio.label("win_ratio")
-    )
+        (cast(func.coalesce(win_query.c.wins, 0), Float) /
+         cast(
+             func.nullif(
+                 func.coalesce(win_query.c.wins, 0) +
+                 func.coalesce(loss_query.c.losses, 0), 0
+             ), Float
+         )).label("win_ratio")
+    ).outerjoin(
+        win_query, Player.id == win_query.c.player_id
+        ).outerjoin(loss_query, Player.id == loss_query.c.player_id)
 
-    if date:
-        query = query.outerjoin(
-            WinGame,
-            (WinGame.winner_id == Player.id) &
-            (WinGame.chat_id == chat_id) &
-            (WinGame.date == date)
-        ).outerjoin(
-            LossGame,
-            (LossGame.loser_id == Player.id) &
-            (LossGame.chat_id == chat_id) &
-            (LossGame.date == date)
-        )
-    else:
-        query = query.outerjoin(
-            WinGame,
-            (WinGame.winner_id == Player.id) &
-            (WinGame.chat_id == chat_id)
-        ).outerjoin(
-            LossGame,
-            (LossGame.loser_id == Player.id) &
-            (LossGame.chat_id == chat_id)
-        )
-
-    query = query.group_by(Player.id)
     return query.all()

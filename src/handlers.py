@@ -1,7 +1,8 @@
-from datetime import datetime
-from src.functions import calculate_ranking
-
+import os
 import re
+import traceback
+from datetime import datetime
+
 import pytz
 from sqlalchemy.exc import IntegrityError
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -9,10 +10,10 @@ from telegram.constants import MessageEntityType
 from telegram.ext import ContextTypes
 
 from src.db import SessionLocal
+from src.functions import calculate_ranking
 from src.logging_config import logger
 from src.models import Game, Player
 from src.utils import with_emoji
-import traceback
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -83,7 +84,8 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "Ask them to send /add_me first."
                 )
             elif entity.type == MessageEntityType.MENTION:
-                mentioned_text = text[entity.offset: entity.offset + entity.length]
+                mentioned_text = text[entity.offset:
+                                      entity.offset + entity.length]
                 await update.message.reply_text(
                     f"Player @{mentioned_text} not found. "
                     "Ask them to send /add_me first."
@@ -280,6 +282,25 @@ async def error_handler(
         )
     )
     logger.debug("Traceback details:\n%s", traceback_str)
+    # Notify the developer
+    developer_id = os.getenv("DEVELOPER_ID")
+    error_message = (
+        f"🚨 <b>Error in Game Manager Bot</b>\n"
+        f"<b>User:</b> "
+        f"{getattr(getattr(update, 'effective_user', None), 'id', 'N/A')}\n"
+        f"<b>Chat:</b> "
+        f"{getattr(getattr(update, 'effective_chat', None), 'id', 'N/A')}\n"
+        f"<b>Error:</b> <code>{context.error}</code>"
+    )
+    try:
+        if developer_id is not None:
+            await context.bot.send_message(
+                chat_id=int(developer_id),
+                text=error_message,
+                parse_mode="HTML"
+            )
+    except Exception as notify_err:
+        logger.error("Failed to notify developer: %s", notify_err)
 
 
 async def handle_delete_button(
