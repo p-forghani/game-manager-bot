@@ -255,7 +255,7 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
         medal = with_emoji(medals[idx-1] if idx <= 3 else ":dart:")
         ranking_message += with_emoji(
             f"{medal} <b>{idx}. {player.first_name}</b> "
-            f"— <i>Win Ratio:</i> {score:.2f}%\n"
+            f"— <i>Win Ratio:</i> {score * 100:.0f}%\n"
         )
 
     ranking_message += with_emoji(
