@@ -41,3 +41,9 @@ Telegram bot to manage games, keeps scores between a group
    ```sh
    python run.py
    ```
+
+   7. **Update the bot (after making changes or pulling new code)**  
+      ```sh
+      git pull origin main
+      sudo systemctl restart gamebot
+      ```
