@@ -1,5 +1,6 @@
-from sqlalchemy import func, cast, Float
-from src.models import Player, Game
+from sqlalchemy import Float, cast, func
+
+from src.models import Game, Player
 
 
 def calculate_ranking(session, chat_id, date=None):

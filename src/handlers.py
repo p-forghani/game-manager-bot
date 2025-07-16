@@ -10,6 +10,7 @@ from telegram.constants import MessageEntityType
 from telegram.ext import ContextTypes
 
 from src.db import SessionLocal
+from src.decorators import reject_if_private_chat
 from src.functions import calculate_ranking
 from src.logging_config import logger
 from src.models import Game, Player
@@ -50,6 +51,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message, parse_mode="MarkdownV2")
 
 
+@reject_if_private_chat
 async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = SessionLocal()
 
@@ -144,6 +146,7 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session.close()
 
 
+@reject_if_private_chat
 async def add_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
@@ -200,6 +203,7 @@ async def add_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.close()
 
 
+@reject_if_private_chat
 async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = SessionLocal()
 
