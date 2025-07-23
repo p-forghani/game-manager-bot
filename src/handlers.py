@@ -18,6 +18,8 @@ from src.utils import with_emoji
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
     await update.message.reply_text(
         with_emoji(
             ":wave: *Welcome to the Game Manager Bot\\!*\n\n"
@@ -48,6 +50,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         "*:man_technologist: Developer:* @pouriaf99"
     )
+    if not update.message:
+        return
     await update.message.reply_text(message, parse_mode="MarkdownV2")
 
 
@@ -57,7 +61,8 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     winner_user = None
     loser_user = None
-
+    if not update.message:
+        return
     text = update.message.text or ""
     entities = update.message.entities or []
     if len(entities) < 3:
@@ -66,10 +71,14 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         session.close()
         return
+    if not update.effective_chat:
+        return
     chat_id = update.effective_chat.id
 
     for entity in entities:
-        if entity.type == MessageEntityType.TEXT_MENTION:
+        if not entity.user:
+            continue
+        elif entity.type == MessageEntityType.TEXT_MENTION:
             player = session.query(Player).filter_by(
                 telegram_id=entity.user.id).first()
         elif entity.type == MessageEntityType.MENTION:
@@ -120,11 +129,15 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
         game_date = msg_date_utc.astimezone(timezone).date()
 
     # Step 4: Save the game record
+    if not winner_user or not loser_user:
+        session.close()
+        return
     game = Game(
         winner_id=winner_user.id,
         loser_id=loser_user.id,
         date=game_date,
-        chat_id=chat_id)
+        chat_id=chat_id
+    )
     session.add(game)
     session.commit()
 
@@ -137,7 +150,7 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"Game with ID {game.id} recorded successfully!\n"
-        f"Recorded: {winner_user.first_name} won "
+        f"Recorded: <b>{winner_user.first_name}</b> won "
         f"against <b>{loser_user.first_name}</b> "
         f"on {game_date}",
         parse_mode="HTML",
@@ -149,7 +162,8 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @reject_if_private_chat
 async def add_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-
+    if not update.message:
+        return
     if not user:
         await update.message.reply_text("Unable to get your info. Try again.")
         return
@@ -175,7 +189,6 @@ async def add_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.rollback()
         finally:
             session.close()
-            return
 
     player = Player(
         telegram_id=user.id,
@@ -205,6 +218,8 @@ async def add_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @reject_if_private_chat
 async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
     session = SessionLocal()
 
     pattern = r"^\d{4}-\d{2}-\d{2}$"
@@ -223,6 +238,8 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+    if not update.effective_chat:
+        return
     chat_id = update.effective_chat.id
 
     players_with_ratio = sorted(
@@ -274,7 +291,7 @@ async def error_handler(
     logger.error("Exception occurred:", exc_info=context.error)
 
     if isinstance(update, Update) and getattr(update, "message", None):
-        await update.message.reply_text(
+        await update.message.reply_text(  # type: ignore
             with_emoji(
                 ":warning: Something went wrong. "
                 "The developers have been notified.")
@@ -282,7 +299,7 @@ async def error_handler(
 
     traceback_str = ''.join(
         traceback.format_exception(
-            None, context.error, context.error.__traceback__
+            None, context.error, context.error.__traceback__  # type: ignore
         )
     )
     logger.debug("Traceback details:\n%s", traceback_str)
@@ -310,8 +327,9 @@ async def error_handler(
 async def handle_delete_button(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if not query or not query.message or not query.data:
+        return
     await query.answer()
-
     chat_id = query.message.chat_id
     game_id = int(query.data.split(":")[1])
 
