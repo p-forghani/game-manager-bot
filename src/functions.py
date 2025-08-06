@@ -1,5 +1,7 @@
 import os
+from datetime import date, datetime
 
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import Float, cast, func
 
 from src.logging_config import logger
@@ -83,3 +85,55 @@ async def report_developer(context, message):
         )
     except Exception as notify_err:
         logger.error("Failed to notify developer: %s", notify_err)
+
+
+def generate_games_history_message(
+    session,
+    chat_id: int,
+    message: str = "",
+    game_date: date = datetime.now().date(),
+    include_delete_buttons: bool = True,
+) -> tuple[str, InlineKeyboardMarkup | None]:
+    """
+    Create a formatted message and keyboard for displaying games by date with optional delete buttons.
+
+    Args:
+        session: SQLAlchemy session
+        chat_id: Chat ID to filter games by
+        message: Message to prepend to the games list
+        game_date: Date to filter games by
+        include_delete_buttons: Whether to include delete buttons for each game
+
+    Returns:
+        Tuple of (formatted_message, keyboard_markup)
+    """
+    formatted_message = message
+    keyboard = []
+
+    games = session.query(Game).filter(
+        Game.date == game_date,
+        Game.chat_id == chat_id
+    ).all()
+
+    if not games:
+        return "", None
+
+    for idx, game in enumerate(games, start=1):
+        # Add game to message
+        formatted_message += (
+            f"{idx}. Game ID <b>{game.id}:</b> "
+            f"<b>{game.winner.first_name}</b> won "
+            f"<b>{game.loser.first_name}</b>\n"
+        )
+
+        # Add delete button if requested
+        if include_delete_buttons:
+            keyboard.append([InlineKeyboardButton(
+                text=with_emoji(f":wastebasket: Delete Game {game.id}"),
+                callback_data=f"delete_game_{game.id}"
+            )])
+
+    return (
+        formatted_message,
+        InlineKeyboardMarkup(keyboard) if keyboard else None
+    )

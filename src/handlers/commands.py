@@ -1,20 +1,18 @@
-import os
 import re
-import traceback
-from datetime import datetime, date
+from datetime import datetime
 
 import pytz
 from sqlalchemy.exc import IntegrityError
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.constants import MessageEntityType, ParseMode
-from telegram.ext import (ContextTypes, ConversationHandler,
-                          MessageHandler, filters)
+from telegram.constants import MessageEntityType
+from telegram.ext import ContextTypes
 
 from src.db import SessionLocal
 from src.decorators import reject_if_private_chat
-from src.functions import calculate_ranking
+from src.functions import calculate_ranking, generate_games_history_message
 from src.logging_config import logger
 from src.models import Game, Player
+from src.templates import HELP_MESSAGE, START_MESSAGE
 from src.utils import with_emoji
 
 
@@ -22,39 +20,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
     await update.message.reply_text(
-        with_emoji(
-            ":wave: *Welcome to the Game Manager Bot!*\n\n"
-            "Track your group's daily games, wins, and rankings — all "
-            "automatically.\n\n"
-            "Type /menu to see the menu.\n"
-            "Type /help to learn how to use the bot."),
-        parse_mode="MarkdownV2"
+        with_emoji(START_MESSAGE),
+        parse_mode="HTML"
     )
+    return
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = with_emoji(
-        "<b>:book: How to Use the Game Manager Bot:</b>\n\n"
-        "<b>:white_check_mark: 1. Register Yourself (one-time):</b>\n"
-        "`/add_me`\n"
-        "You *must* register before using other commands.\n\n"
-        "<b>:video_game: 2. Record a Game:</b>\n"
-        "`/played @winner @loser [date=yyyy-mm-dd]`\n"
-        "Example: `/played @alice @bob date=2025-07-13`\n"
-        "Date is optional - defaults to today.\n\n"
-        "<b>:bar_chart: 3. Check Rankings:</b>\n"
-        "`/rank [yyyy-mm-dd | today]`\n"
-        "Use `/rank today` for today's results.\n"
-        "Use `/rank` (with no date) for all-time rankings.\n\n"
-        "<b>:gear: Menu:</b>\n"
-        "`/menu`\n"
-        "Use `/menu` to see the menu (This feature is under development).\n\n"
-        "<b>:man_technologist: Developer:</b> "
-        "<a href='https://www.pouria.site/'>Pouria Forghani</a>"
-    )
+    logger.debug("help_command() called")
+    message = with_emoji(HELP_MESSAGE)
+    if not update.effective_chat:
+        logger.debug("No chat found")
+        return
+    if update.callback_query:
+        await update.effective_chat.send_message(message, parse_mode="HTML")
+        return
     if not update.message:
+        logger.debug("No message found")
         return
     await update.message.reply_text(message, parse_mode="HTML")
+    return
 
 
 @reject_if_private_chat
@@ -146,6 +131,7 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     success_message = f"Games Played on {game_date}:\n\n"
     games_created = 0
+    keyboard = []
     # Step 4: Save the game record
     for i in range(0, len(player_objs), 2):
         winner = player_objs[i]
@@ -168,19 +154,25 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
         games_created += 1
 
         session.add(game)
-        session.flush()  # This assigns the ID without committing
+         # This assigns the ID without committing
+        session.flush()
         success_message += (
-            f"{games_created}.Game {game.id}: <b>{winner.first_name}</b> won "
-            f"<b>{loser.first_name}</b>  /delete_game_{game.id}\n"
+            f"<i>{games_created}</i>. Game ID <b>{game.id}:</b> <b>{winner.first_name}</b> won "
+            f"<b>{loser.first_name}</b>\n"
         )
+        keyboard.append([InlineKeyboardButton(
+            text=with_emoji(f":wastebasket: Delete Game {game.id}"),
+            callback_data=f"delete_game_{game.id}"
+        )])
 
     session.commit()
-
     await update.message.reply_text(
         success_message,
         parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
     session.close()
+    return
 
 
 @reject_if_private_chat
@@ -309,16 +301,17 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "\n\n:rocket: <b>Let's keep the games rolling!</b>")
     await update.message.reply_text(ranking_message, parse_mode="HTML")
     session.close()
+    return
 
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show the main menu with inline keyboard buttons."""
-    if not update.message:
-        return
+    logger.debug("show_menu() called")
 
     menu_text = with_emoji(
         ":game_die: <b>Game Manager Menu</b>\n\n"
         "Choose an option from the menu below:"
+        "Or Use /played to record a game; and /games to see the games history."
     )
 
     keyboard = [
@@ -326,27 +319,47 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=with_emoji(":trophy: Rankings"),
             callback_data="menu_rankings"
         )],
-        [InlineKeyboardButton(
-            text=with_emoji(":video_game: Start Session"),
-            callback_data="menu_start_session"
-        )],
-        [InlineKeyboardButton(
-            text=with_emoji(":stop_button: End Session"),
-            callback_data="menu_end_session"
-        )],
+        # [InlineKeyboardButton(
+        #     text=with_emoji(":video_game: Start Session"),
+        #     callback_data="menu_start_session"
+        # )],
+        # [InlineKeyboardButton(
+        #     text=with_emoji(":stop_button: End Session"),
+        #     callback_data="menu_end_session"
+        # )],
         [InlineKeyboardButton(
             text=with_emoji(":bust_in_silhouette: Add Me"),
             callback_data="menu_add_me"
+        )],
+        [InlineKeyboardButton(
+            text=with_emoji(":question: Help"),
+            callback_data="menu_help"
         )]
     ]
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    # If the command is called from a callback query ie back to menu
+    # from other menu, edit the message
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(
+            menu_text,
+            parse_mode="HTML",
+            reply_markup=reply_markup
+        )
+        return
+
+    if not update.message:
+        logger.debug("No message found")
+        return
+    # If the command is called from a message, send a new message
     await update.message.reply_text(
         menu_text,
         parse_mode="HTML",
         reply_markup=reply_markup
     )
+    return
 
 
 async def handle_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -355,5 +368,57 @@ async def handle_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.debug("\n".join([arg for arg in context.args]))
     else:
         logger.debug("No arguments provided")
+    return
 
-# TODO: Build the del_game_id command
+
+@reject_if_private_chat
+async def handle_games_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """If date is provided, show the games for that date,
+    otherwise show all games played on that chat today."""
+    if not update.message:
+        return
+
+    session = SessionLocal()
+    pattern = r"date=(\d{4}-\d{2}-\d{2})$"
+    date = None
+
+    if context.args and len(context.args) > 0:
+        last_arg = context.args[-1].lower()
+        if re.match(pattern, last_arg, re.IGNORECASE):
+            date_str = context.args[-1].split("=")[1]
+            date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        else:
+            await update.message.reply_text(
+                "Invalid date format. Use date=YYYY-MM-DD."
+            )
+            session.close()
+            return
+
+    if not date:
+        date = datetime.now(pytz.timezone("Asia/Tehran")).date()
+    if not update.effective_chat:
+        session.close()
+        return
+
+    games_message, games_keyboard = generate_games_history_message(
+        session=session,
+        chat_id=update.effective_chat.id,
+        game_date=date
+    )
+    if not games_message:
+        await update.message.reply_text(
+            with_emoji(":no_entry: No games played on this date in this chat.")
+        )
+        session.close()
+        return
+
+    games_list_message = with_emoji(f"Games played on {date}:\n\n" + games_message)
+
+
+    await update.message.reply_text(
+        games_list_message,
+        parse_mode="HTML",
+        reply_markup=games_keyboard if games_keyboard else None
+    )
+    session.close()
+    return

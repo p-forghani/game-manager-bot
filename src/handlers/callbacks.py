@@ -1,26 +1,18 @@
 import os
-import re
 import traceback
-from datetime import datetime, date
+from datetime import date, datetime
 
-import pytz
-from sqlalchemy.exc import IntegrityError
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.constants import MessageEntityType, ParseMode
-from telegram.ext import (ContextTypes, ConversationHandler,
-                          MessageHandler, filters)
+from telegram.ext import (ContextTypes, ConversationHandler)
 
+from src.constants import WAITING_FOR_DATE
 from src.db import SessionLocal
 from src.decorators import reject_if_private_chat
 from src.functions import calculate_ranking, generate_rankings_text
+from src.handlers.commands import add_me, help_command, show_menu
 from src.logging_config import logger
-from src.models import Game, Player
+from src.models import Game
 from src.utils import with_emoji
-
-# Define conversation states
-WAITING_FOR_DATE = 1
-WAITING_FOR_WINNER = 2
-WAITING_FOR_LOSER = 3
 
 
 async def error_handler(
@@ -60,17 +52,19 @@ async def error_handler(
             )
     except Exception as notify_err:
         logger.error("Failed to notify developer: %s", notify_err)
+    return
 
 
 @reject_if_private_chat
 async def handle_delete_button(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the button press to delete a game."""
     query = update.callback_query
     if not query or not query.message or not query.data:
         return
     await query.answer()
     chat_id = query.message.chat_id
-    game_id = int(query.data.split(":")[1])
+    game_id = int(query.data.split("_")[2])
 
     session = SessionLocal()
     game = session.query(Game).filter_by(id=game_id, chat_id=chat_id).first()
@@ -81,13 +75,31 @@ async def handle_delete_button(
 
     session.delete(game)
     session.commit()
-    await query.edit_message_text(with_emoji(":wastebasket: Game deleted."))
+    if not query.message.text:
+        session.close()
+        return
+    message_text = query.message.text
+    lines = message_text.split("\n")
+    for line in lines:
+        if f"Game ID {game_id}:" in line:
+            line = f"<s>{line}</s>"
+    message_text = "\n".join(lines)
+    if not query.message.reply_markup:
+        keyboard = []
+    else:
+        keyboard = query.message.reply_markup.inline_keyboard
+        keyboard = [
+            [button for button in row if button.callback_data != f"delete_game_{game_id}"]
+            for row in keyboard
+        ]
+        keyboard = [row for row in keyboard if row]
+    await query.edit_message_text(message_text, reply_markup=InlineKeyboardMarkup(keyboard))
+    # await query.edit_message_text(with_emoji(f":wastebasket: Game {game_id} deleted."))
+    session.close()
+    return
 
 
-async def start_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    pass
-
-
+@reject_if_private_chat
 async def handle_menu_rankings(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle rankings menu button press."""
@@ -127,8 +139,10 @@ async def handle_menu_rankings(
         parse_mode="HTML",
         reply_markup=reply_markup
     )
+    return
 
 
+@reject_if_private_chat
 async def handle_rank_callback(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle ranking-related callback queries."""
@@ -175,7 +189,7 @@ async def handle_rank_callback(
         await show_menu(update, context)
         return ConversationHandler.END
 
-
+@reject_if_private_chat
 async def handle_date_input(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle text message containing date input for rankings."""
@@ -218,7 +232,7 @@ async def handle_date_input(
             )
         return WAITING_FOR_DATE
 
-
+@reject_if_private_chat
 async def show_rankings_for_date(
         update: Update,
         context: ContextTypes.DEFAULT_TYPE,
@@ -231,10 +245,10 @@ async def show_rankings_for_date(
             chat_id = update.effective_chat.id
         else:
             return
-            
+
         rankings = calculate_ranking(session, chat_id, date)
         logger.info(f"Rankings: {rankings}")
-        
+
         if not rankings:
             rankings_text = with_emoji(
                 f":calendar: <b>Rankings for {date.strftime('%Y-%m-%d')}</b>\n\n"
@@ -271,8 +285,9 @@ async def show_rankings_for_date(
 
     finally:
         session.close()
+    return
 
-
+@reject_if_private_chat
 async def show_rankings_all_time(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Display all-time rankings."""
@@ -324,511 +339,514 @@ async def show_rankings_all_time(
         session.close()
 
 
-async def handle_menu_start_session(
-        update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle start session menu button press."""
-    if not update.callback_query:
-        return
-
-    await update.callback_query.answer()
-
-    # Check if a session is already running
-    chat_id = update.effective_chat.id
-    if context.user_data.get(f'session_{chat_id}'):
-        await update.callback_query.edit_message_text(
-            with_emoji(
-                ":warning: *Session Already Running*\n\n"
-                "A session is already active in this chat. "
-                "Please end the current session first."
-            ),
-            parse_mode="MarkdownV2",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton(
-                    text=with_emoji(":left_arrow: Back to Menu"),
-                    callback_data="menu_back"
-                )
-            ]])
-        )
-        return
-
-    # Initialize session
-    context.user_data[f'session_{chat_id}'] = {
-        'games': [],
-        'message_id': None
-    }
-
-    # Send initial session message
-    session_text = with_emoji(
-        ":video_game: *Game Session Started*\n\n"
-        "No games played yet.\n\n"
-        "Choose the winner of the first game:"
-    )
-
-    # Get all players for the winner selection
-    session = SessionLocal()
-    try:
-        players = session.query(Player).all()
-        keyboard = []
-        for player in players:
-            if player and player.first_name:
-                keyboard.append([InlineKeyboardButton(
-                    text=player.first_name,
-                    callback_data=f"session_winner_{player.id}"
-                )])
-
-        # Add cancel button
-        keyboard.append([
-            InlineKeyboardButton(
-                text=with_emoji(":x: End Session"),
-                callback_data="session_end"
-            )
-        ])
-
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        message = await update.callback_query.edit_message_text(
-            session_text,
-            parse_mode="MarkdownV2",
-            reply_markup=reply_markup
-        )
-
-        # Store message ID for updates
-        context.user_data[f'session_{chat_id}']['message_id'] = message.message_id
-
-    finally:
-        session.close()
-
-
-async def handle_session_winner(
-        update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle winner selection in session."""
-    query = update.callback_query
-    if not query or not query.data:
-        return
-
-    await query.answer()
-
-    # Extract winner ID
-    winner_id = int(query.data.replace("session_winner_", ""))
-
-    # Store winner in context
-    chat_id = update.effective_chat.id
-    context.user_data[f'session_{chat_id}']['current_winner'] = winner_id
-
-    # Get winner name
-    session = SessionLocal()
-    try:
-        winner = session.query(Player).filter_by(id=winner_id).first()
-        if not winner:
-            await query.edit_message_text("Player not found.")
-            return
-
-        # Update session message to show winner selection
-        session_data = context.user_data[f'session_{chat_id}']
-        games_text = ""
-        if session_data['games']:
-            games_text = "\n\n*Games Played:*\n"
-            for i, game in enumerate(session_data['games'], 1):
-                games_text += f"{i}\\. {game['winner']} won against {game['loser']}\n"
-
-        session_text = with_emoji(
-            f":video_game: *Game Session*\n\n"
-            f"Current game: {winner.first_name} won...\n"
-            f"{games_text}\n"
-            f"Choose the loser:"
-        )
-
-        # Get all players for loser selection (excluding winner)
-        players = session.query(Player).filter(Player.id != winner_id).all()
-        keyboard = []
-        for player in players:
-            if player and player.first_name:
-                keyboard.append([InlineKeyboardButton(
-                    text=player.first_name,
-                    callback_data=f"session_loser_{player.id}"
-                )])
-
-        # Add cancel button
-        keyboard.append([
-            InlineKeyboardButton(
-                text=with_emoji(":x: Cancel"),
-                callback_data="session_cancel_game"
-            )
-        ])
-
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        await query.edit_message_text(
-            session_text,
-            parse_mode="MarkdownV2",
-            reply_markup=reply_markup
-        )
-
-    finally:
-        session.close()
-
-
-async def handle_session_loser(
-        update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle loser selection in session."""
-    query = update.callback_query
-    if not query or not query.data:
-        return
-
-    await query.answer()
-
-    # Extract loser ID
-    loser_id = int(query.data.replace("session_loser_", ""))
-
-    # Get session data
-    chat_id = update.effective_chat.id
-    session_data = context.user_data[f'session_{chat_id}']
-    winner_id = session_data.get('current_winner')
-
-    if not winner_id:
-        await query.edit_message_text("No winner selected.")
-        return
-
-    # Get player names
-    session = SessionLocal()
-    try:
-        winner = session.query(Player).filter_by(id=winner_id).first()
-        loser = session.query(Player).filter_by(id=loser_id).first()
-
-        if not winner or not loser:
-            await query.edit_message_text("Player not found.")
-            return
-
-        if not winner.first_name or not loser.first_name:
-            await query.edit_message_text("Player name not found.")
-            return
-
-        # Add game to session
-        game = {
-            'winner': winner.first_name,
-            'loser': loser.first_name,
-            'winner_id': winner_id,
-            'loser_id': loser_id
-        }
-        session_data['games'].append(game)
-
-        # Clear current winner
-        session_data.pop('current_winner', None)
-
-        # Update session message
-        games_text = ""
-        if session_data['games']:
-            games_text = "\n\n*Games Played:*\n"
-            for i, game in enumerate(session_data['games'], 1):
-                delete_button = InlineKeyboardButton(
-                    text=with_emoji(":wastebasket:"),
-                    callback_data=f"session_delete_game_{i-1}"
-                )
-                games_text += (
-                    f"{i}\\. {game['winner']} won against {game['loser']} "
-                    f"[Delete](callback_data:session_delete_game_{i-1})\n"
-                )
-
-        session_text = with_emoji(
-            f":video_game: *Game Session*\n\n"
-            f"Game recorded: {winner.first_name} won against {loser.first_name}\n"
-            f"{games_text}\n"
-            f"Choose the winner of the next game:"
-        )
-
-        # Get all players for next winner selection
-        players = session.query(Player).all()
-        keyboard = []
-        for player in players:
-            keyboard.append([InlineKeyboardButton(
-                text=player.first_name,
-                callback_data=f"session_winner_{player.id}"
-            )])
-
-        # Add end session button
-        keyboard.append([
-            InlineKeyboardButton(
-                text=with_emoji(":stop_button: End Session"),
-                callback_data="session_end"
-            )
-        ])
-
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        await query.edit_message_text(
-            session_text,
-            parse_mode="MarkdownV2",
-            reply_markup=reply_markup
-        )
-
-    finally:
-        session.close()
-
-
-async def handle_session_delete_game(
-        update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle game deletion in session."""
-    query = update.callback_query
-    if not query or not query.data:
-        return
-
-    await query.answer()
-
-    # Extract game index
-    game_index = int(query.data.replace("session_delete_game_", ""))
-
-    # Get session data
-    chat_id = update.effective_chat.id
-    session_data = context.user_data[f'session_{chat_id}']
-
-    if game_index < len(session_data['games']):
-        # Remove the game
-        deleted_game = session_data['games'].pop(game_index)
-
-        # Update session message
-        games_text = ""
-        if session_data['games']:
-            games_text = "\n\n*Games Played:*\n"
-            for i, game in enumerate(session_data['games'], 1):
-                games_text += (
-                    f"{i}\\. {game['winner']} won against {game['loser']}\n"
-                )
-
-        session_text = with_emoji(
-            f":video_game: *Game Session*\n\n"
-            f"Game deleted: {deleted_game['winner']} vs {deleted_game['loser']}\n"
-            f"{games_text}\n"
-            f"Choose the winner of the next game:"
-        )
-
-        # Get all players for next winner selection
-        session = SessionLocal()
-        try:
-            players = session.query(Player).all()
-            keyboard = []
-            for player in players:
-                keyboard.append([InlineKeyboardButton(
-                    text=player.first_name,
-                    callback_data=f"session_winner_{player.id}"
-                )])
-
-            # Add end session button
-            keyboard.append([
-                InlineKeyboardButton(
-                    text=with_emoji(":stop_button: End Session"),
-                    callback_data="session_end"
-                )
-            ])
-
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
-            await query.edit_message_text(
-                session_text,
-                parse_mode="MarkdownV2",
-                reply_markup=reply_markup
-            )
-
-        finally:
-            session.close()
-
-
-async def handle_session_end(
-        update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle session end."""
-    query = update.callback_query
-    if not query:
-        return
-
-    await query.answer()
-
-    # Get session data
-    chat_id = update.effective_chat.id
-    session_data = context.user_data.get(f'session_{chat_id}')
-
-    if not session_data:
-        await query.edit_message_text(
-            with_emoji(":warning: No active session found."),
-            parse_mode="MarkdownV2"
-        )
-        return
-
-    # Save games to database
-    session = SessionLocal()
-    try:
-        games_saved = 0
-        for game in session_data['games']:
-            new_game = Game(
-                winner_id=game['winner_id'],
-                loser_id=game['loser_id'],
-                date=datetime.now().date(),
-                chat_id=chat_id
-            )
-            session.add(new_game)
-            games_saved += 1
-
-        session.commit()
-
-        # Show final summary
-        games_text = ""
-        if session_data['games']:
-            games_text = "\n\n*Games Played:*\n"
-            for i, game in enumerate(session_data['games'], 1):
-                games_text += (
-                    f"{i}\\. {game['winner']} won against {game['loser']}\n"
-                )
-
-        summary_text = with_emoji(
-            f":stop_button: *Session Ended*\n\n"
-            f"Total games: {len(session_data['games'])}\n"
-            f"Games saved: {games_saved}\n"
-            f"{games_text}"
-        )
-
-        # Clear session data
-        if context.user_data:
-            context.user_data.pop(f'session_{chat_id}', None)
-
-        await query.edit_message_text(
-            summary_text,
-            parse_mode="MarkdownV2",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton(
-                    text=with_emoji(":left_arrow: Back to Menu"),
-                    callback_data="menu_back"
-                )
-            ]])
-        )
-
-    except Exception as e:
-        session.rollback()
-        logger.error(f"Error saving session games: {e}")
-        await query.edit_message_text(
-            with_emoji(":warning: Error saving games to database."),
-            parse_mode="MarkdownV2"
-        )
-    finally:
-        session.close()
-
-
-async def handle_session_cancel_game(
-        update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle game cancellation in session."""
-    query = update.callback_query
-    if not query:
-        return
-
-    await query.answer()
-
-    # Clear current winner and go back to winner selection
-    chat_id = update.effective_chat.id
-    session_data = context.user_data[f'session_{chat_id}']
-    if session_data:
-        session_data.pop('current_winner', None)
-
-    # Update session message
-    games_text = ""
-    if session_data['games']:
-        games_text = "\n\n*Games Played:*\n"
-        for i, game in enumerate(session_data['games'], 1):
-            games_text += f"{i}\\. {game['winner']} won against {game['loser']}\n"
-
-    session_text = with_emoji(
-        f":video_game: *Game Session*\n\n"
-        f"Game cancelled.\n"
-        f"{games_text}\n"
-        f"Choose the winner of the next game:"
-    )
-
-    # Get all players for winner selection
-    session = SessionLocal()
-    try:
-        players = session.query(Player).all()
-        keyboard = []
-        for player in players:
-            if player and player.first_name:
-                keyboard.append([InlineKeyboardButton(
-                    text=player.first_name,
-                    callback_data=f"session_winner_{player.id}"
-                )])
-
-        # Add end session button
-        keyboard.append([
-            InlineKeyboardButton(
-                text=with_emoji(":stop_button: End Session"),
-                callback_data="session_end"
-            )
-        ])
-
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        await query.edit_message_text(
-            session_text,
-            parse_mode="MarkdownV2",
-            reply_markup=reply_markup
-        )
-
-    finally:
-        session.close()
-
-
-async def handle_menu_end_session(
-        update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle end session menu button press."""
-    if not update.callback_query:
-        return
-
-    await update.callback_query.answer()
-
-    # Check if a session is running
-    chat_id = update.effective_chat.id
-    session_data = context.user_data.get(f'session_{chat_id}')
-
-    if not session_data:
-        await update.callback_query.edit_message_text(
-            with_emoji(
-                ":warning: *No Active Session*\n\n"
-                "There is no session running in this chat."
-            ),
-            parse_mode="MarkdownV2",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton(
-                    text=with_emoji(":left_arrow: Back to Menu"),
-                    callback_data="menu_back"
-                )
-            ]])
-        )
-        return
-
-    # Show session summary without buttons
-    games_text = ""
-    if session_data['games']:
-        games_text = "\n\n*Games Played:*\n"
-        for i, game in enumerate(session_data['games'], 1):
-            games_text += f"{i}\\. {game['winner']} won against {game['loser']}\n"
-
-    summary_text = with_emoji(
-        f":stop_button: *Session Summary*\n\n"
-        f"Total games: {len(session_data['games'])}\n"
-        f"{games_text}\n"
-        f"Session is still active. Use the session controls to end it."
-    )
-
-    await update.callback_query.edit_message_text(
-        summary_text,
-        parse_mode="MarkdownV2",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                text=with_emoji(":left_arrow: Back to Menu"),
-                callback_data="menu_back"
-            )
-        ]])
-    )
-
-
+# async def handle_menu_start_session(
+#         update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     """Handle start session menu button press."""
+#     if not update.callback_query:
+#         return
+
+#     await update.callback_query.answer()
+
+#     # Check if a session is already running
+#     chat_id = update.effective_chat.id
+#     if context.user_data.get(f'session_{chat_id}'):
+#         await update.callback_query.edit_message_text(
+#             with_emoji(
+#                 ":warning: *Session Already Running*\n\n"
+#                 "A session is already active in this chat. "
+#                 "Please end the current session first."
+#             ),
+#             parse_mode="MarkdownV2",
+#             reply_markup=InlineKeyboardMarkup([[
+#                 InlineKeyboardButton(
+#                     text=with_emoji(":left_arrow: Back to Menu"),
+#                     callback_data="menu_back"
+#                 )
+#             ]])
+#         )
+#         return
+
+#     # Initialize session
+#     context.user_data[f'session_{chat_id}'] = {
+#         'games': [],
+#         'message_id': None
+#     }
+
+#     # Send initial session message
+#     session_text = with_emoji(
+#         ":video_game: *Game Session Started*\n\n"
+#         "No games played yet.\n\n"
+#         "Choose the winner of the first game:"
+#     )
+
+#     # Get all players for the winner selection
+#     session = SessionLocal()
+#     try:
+#         players = session.query(Player).all()
+#         keyboard = []
+#         for player in players:
+#             if player and player.first_name:
+#                 keyboard.append([InlineKeyboardButton(
+#                     text=player.first_name,
+#                     callback_data=f"session_winner_{player.id}"
+#                 )])
+
+#         # Add cancel button
+#         keyboard.append([
+#             InlineKeyboardButton(
+#                 text=with_emoji(":x: End Session"),
+#                 callback_data="session_end"
+#             )
+#         ])
+
+#         reply_markup = InlineKeyboardMarkup(keyboard)
+
+#         message = await update.callback_query.edit_message_text(
+#             session_text,
+#             parse_mode="MarkdownV2",
+#             reply_markup=reply_markup
+#         )
+
+#         # Store message ID for updates
+#         context.user_data[f'session_{chat_id}']['message_id'] = message.message_id
+
+#     finally:
+#         session.close()
+
+
+# async def handle_session_winner(
+#         update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     """Handle winner selection in session."""
+#     query = update.callback_query
+#     if not query or not query.data:
+#         return
+
+#     await query.answer()
+
+#     # Extract winner ID
+#     winner_id = int(query.data.replace("session_winner_", ""))
+
+#     # Store winner in context
+#     chat_id = update.effective_chat.id
+#     context.user_data[f'session_{chat_id}']['current_winner'] = winner_id
+
+#     # Get winner name
+#     session = SessionLocal()
+#     try:
+#         winner = session.query(Player).filter_by(id=winner_id).first()
+#         if not winner:
+#             await query.edit_message_text("Player not found.")
+#             return
+
+#         # Update session message to show winner selection
+#         session_data = context.user_data[f'session_{chat_id}']
+#         games_text = ""
+#         if session_data['games']:
+#             games_text = "\n\n*Games Played:*\n"
+#             for i, game in enumerate(session_data['games'], 1):
+#                 games_text += f"{i}\\. {game['winner']} won against {game['loser']}\n"
+
+#         session_text = with_emoji(
+#             f":video_game: *Game Session*\n\n"
+#             f"Current game: {winner.first_name} won...\n"
+#             f"{games_text}\n"
+#             f"Choose the loser:"
+#         )
+
+#         # Get all players for loser selection (excluding winner)
+#         players = session.query(Player).filter(Player.id != winner_id).all()
+#         keyboard = []
+#         for player in players:
+#             if player and player.first_name:
+#                 keyboard.append([InlineKeyboardButton(
+#                     text=player.first_name,
+#                     callback_data=f"session_loser_{player.id}"
+#                 )])
+
+#         # Add cancel button
+#         keyboard.append([
+#             InlineKeyboardButton(
+#                 text=with_emoji(":x: Cancel"),
+#                 callback_data="session_cancel_game"
+#             )
+#         ])
+
+#         reply_markup = InlineKeyboardMarkup(keyboard)
+
+#         await query.edit_message_text(
+#             session_text,
+#             parse_mode="MarkdownV2",
+#             reply_markup=reply_markup
+#         )
+
+#     finally:
+#         session.close()
+
+
+# async def handle_session_loser(
+#         update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     """Handle loser selection in session."""
+#     query = update.callback_query
+#     if not query or not query.data:
+#         return
+
+#     await query.answer()
+
+#     # Extract loser ID
+#     loser_id = int(query.data.replace("session_loser_", ""))
+
+#     # Get session data
+#     chat_id = update.effective_chat.id
+#     session_data = context.user_data[f'session_{chat_id}']
+#     winner_id = session_data.get('current_winner')
+
+#     if not winner_id:
+#         await query.edit_message_text("No winner selected.")
+#         return
+
+#     # Get player names
+#     session = SessionLocal()
+#     try:
+#         winner = session.query(Player).filter_by(id=winner_id).first()
+#         loser = session.query(Player).filter_by(id=loser_id).first()
+
+#         if not winner or not loser:
+#             await query.edit_message_text("Player not found.")
+#             return
+
+#         if not winner.first_name or not loser.first_name:
+#             await query.edit_message_text("Player name not found.")
+#             return
+
+#         # Add game to session
+#         game = {
+#             'winner': winner.first_name,
+#             'loser': loser.first_name,
+#             'winner_id': winner_id,
+#             'loser_id': loser_id
+#         }
+#         session_data['games'].append(game)
+
+#         # Clear current winner
+#         session_data.pop('current_winner', None)
+
+#         # Update session message
+#         games_text = ""
+#         if session_data['games']:
+#             games_text = "\n\n*Games Played:*\n"
+#             for i, game in enumerate(session_data['games'], 1):
+#                 delete_button = InlineKeyboardButton(
+#                     text=with_emoji(":wastebasket:"),
+#                     callback_data=f"session_delete_game_{i-1}"
+#                 )
+#                 games_text += (
+#                     f"{i}\\. {game['winner']} won against {game['loser']} "
+#                     f"[Delete](callback_data:session_delete_game_{i-1})\n"
+#                 )
+
+#         session_text = with_emoji(
+#             f":video_game: *Game Session*\n\n"
+#             f"Game recorded: {winner.first_name} won against {loser.first_name}\n"
+#             f"{games_text}\n"
+#             f"Choose the winner of the next game:"
+#         )
+
+#         # Get all players for next winner selection
+#         players = session.query(Player).all()
+#         keyboard = []
+#         for player in players:
+#             keyboard.append([InlineKeyboardButton(
+#                 text=player.first_name,
+#                 callback_data=f"session_winner_{player.id}"
+#             )])
+
+#         # Add end session button
+#         keyboard.append([
+#             InlineKeyboardButton(
+#                 text=with_emoji(":stop_button: End Session"),
+#                 callback_data="session_end"
+#             )
+#         ])
+
+#         reply_markup = InlineKeyboardMarkup(keyboard)
+
+#         await query.edit_message_text(
+#             session_text,
+#             parse_mode="MarkdownV2",
+#             reply_markup=reply_markup
+#         )
+
+#     finally:
+#         session.close()
+
+
+# async def handle_session_delete_game(
+#         update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     """Handle game deletion in session."""
+#     query = update.callback_query
+#     if not query or not query.data:
+#         return
+
+#     await query.answer()
+
+#     # Extract game index
+#     game_index = int(query.data.replace("session_delete_game_", ""))
+
+#     # Get session data
+#     chat_id = update.effective_chat.id
+#     session_data = context.user_data[f'session_{chat_id}']
+
+#     if game_index < len(session_data['games']):
+#         # Remove the game
+#         deleted_game = session_data['games'].pop(game_index)
+
+#         # Update session message
+#         games_text = ""
+#         if session_data['games']:
+#             games_text = "\n\n*Games Played:*\n"
+#             for i, game in enumerate(session_data['games'], 1):
+#                 games_text += (
+#                     f"{i}\\. {game['winner']} won against {game['loser']}\n"
+#                 )
+
+#         session_text = with_emoji(
+#             f":video_game: *Game Session*\n\n"
+#             f"Game deleted: {deleted_game['winner']} vs {deleted_game['loser']}\n"
+#             f"{games_text}\n"
+#             f"Choose the winner of the next game:"
+#         )
+
+#         # Get all players for next winner selection
+#         session = SessionLocal()
+#         try:
+#             players = session.query(Player).all()
+#             keyboard = []
+#             for player in players:
+#                 keyboard.append([InlineKeyboardButton(
+#                     text=player.first_name,
+#                     callback_data=f"session_winner_{player.id}"
+#                 )])
+
+#             # Add end session button
+#             keyboard.append([
+#                 InlineKeyboardButton(
+#                     text=with_emoji(":stop_button: End Session"),
+#                     callback_data="session_end"
+#                 )
+#             ])
+
+#             reply_markup = InlineKeyboardMarkup(keyboard)
+
+#             await query.edit_message_text(
+#                 session_text,
+#                 parse_mode="MarkdownV2",
+#                 reply_markup=reply_markup
+#             )
+
+#         finally:
+#             session.close()
+
+
+# async def handle_session_end(
+#         update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     """Handle session end."""
+#     query = update.callback_query
+#     if not query:
+#         return
+
+#     await query.answer()
+
+#     # Get session data
+#     chat_id = update.effective_chat.id
+#     session_data = context.user_data.get(f'session_{chat_id}')
+
+#     if not session_data:
+#         await query.edit_message_text(
+#             with_emoji(":warning: No active session found."),
+#             parse_mode="MarkdownV2"
+#         )
+#         return
+
+#     # Save games to database
+#     session = SessionLocal()
+#     try:
+#         games_saved = 0
+#         for game in session_data['games']:
+#             new_game = Game(
+#                 winner_id=game['winner_id'],
+#                 loser_id=game['loser_id'],
+#                 date=datetime.now().date(),
+#                 chat_id=chat_id
+#             )
+#             session.add(new_game)
+#             games_saved += 1
+
+#         session.commit()
+
+#         # Show final summary
+#         games_text = ""
+#         if session_data['games']:
+#             games_text = "\n\n*Games Played:*\n"
+#             for i, game in enumerate(session_data['games'], 1):
+#                 games_text += (
+#                     f"{i}\\. {game['winner']} won against {game['loser']}\n"
+#                 )
+
+#         summary_text = with_emoji(
+#             f":stop_button: *Session Ended*\n\n"
+#             f"Total games: {len(session_data['games'])}\n"
+#             f"Games saved: {games_saved}\n"
+#             f"{games_text}"
+#         )
+
+#         # Clear session data
+#         if context.user_data:
+#             context.user_data.pop(f'session_{chat_id}', None)
+
+#         await query.edit_message_text(
+#             summary_text,
+#             parse_mode="MarkdownV2",
+#             reply_markup=InlineKeyboardMarkup([[
+#                 InlineKeyboardButton(
+#                     text=with_emoji(":left_arrow: Back to Menu"),
+#                     callback_data="menu_back"
+#                 )
+#             ]])
+#         )
+
+#     except Exception as e:
+#         session.rollback()
+#         logger.error(f"Error saving session games: {e}")
+#         await query.edit_message_text(
+#             with_emoji(":warning: Error saving games to database."),
+#             parse_mode="MarkdownV2"
+#         )
+#     finally:
+#         session.close()
+
+
+# async def handle_session_cancel_game(
+#         update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     """Handle game cancellation in session."""
+#     query = update.callback_query
+#     if not query:
+#         return
+
+#     await query.answer()
+
+#     # Clear current winner and go back to winner selection
+#     chat_id = update.effective_chat.id
+#     session_data = context.user_data[f'session_{chat_id}']
+#     if session_data:
+#         session_data.pop('current_winner', None)
+
+#     # Update session message
+#     games_text = ""
+#     if session_data['games']:
+#         games_text = "\n\n*Games Played:*\n"
+#         for i, game in enumerate(session_data['games'], 1):
+#             games_text += f"{i}\\. {game['winner']} won against {game['loser']}\n"
+
+#     session_text = with_emoji(
+#         f":video_game: *Game Session*\n\n"
+#         f"Game cancelled.\n"
+#         f"{games_text}\n"
+#         f"Choose the winner of the next game:"
+#     )
+
+#     # Get all players for winner selection
+#     session = SessionLocal()
+#     try:
+#         players = session.query(Player).all()
+#         keyboard = []
+#         for player in players:
+#             if player and player.first_name:
+#                 keyboard.append([InlineKeyboardButton(
+#                     text=player.first_name,
+#                     callback_data=f"session_winner_{player.id}"
+#                 )])
+
+#         # Add end session button
+#         keyboard.append([
+#             InlineKeyboardButton(
+#                 text=with_emoji(":stop_button: End Session"),
+#                 callback_data="session_end"
+#             )
+#         ])
+
+#         reply_markup = InlineKeyboardMarkup(keyboard)
+
+#         await query.edit_message_text(
+#             session_text,
+#             parse_mode="MarkdownV2",
+#             reply_markup=reply_markup
+#         )
+
+#     finally:
+#         session.close()
+
+
+# async def handle_menu_end_session(
+#         update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     """Handle end session menu button press."""
+#     if not update.callback_query:
+#         return
+
+#     await update.callback_query.answer()
+
+#     # Check if a session is running
+#     chat_id = update.effective_chat.id
+#     session_data = context.user_data.get(f'session_{chat_id}')
+
+#     if not session_data:
+#         await update.callback_query.edit_message_text(
+#             with_emoji(
+#                 ":warning: *No Active Session*\n\n"
+#                 "There is no session running in this chat."
+#             ),
+#             parse_mode="MarkdownV2",
+#             reply_markup=InlineKeyboardMarkup([[
+#                 InlineKeyboardButton(
+#                     text=with_emoji(":left_arrow: Back to Menu"),
+#                     callback_data="menu_back"
+#                 )
+#             ]])
+#         )
+#         return
+
+#     # Show session summary without buttons
+#     games_text = ""
+#     if session_data['games']:
+#         games_text = "\n\n*Games Played:*\n"
+#         for i, game in enumerate(session_data['games'], 1):
+#             games_text += f"{i}\\. {game['winner']} won against {game['loser']}\n"
+
+#     summary_text = with_emoji(
+#         f":stop_button: *Session Summary*\n\n"
+#         f"Total games: {len(session_data['games'])}\n"
+#         f"{games_text}\n"
+#         f"Session is still active. Use the session controls to end it."
+#     )
+
+#     await update.callback_query.edit_message_text(
+#         summary_text,
+#         parse_mode="MarkdownV2",
+#         reply_markup=InlineKeyboardMarkup([[
+#             InlineKeyboardButton(
+#                 text=with_emoji(":left_arrow: Back to Menu"),
+#                 callback_data="menu_back"
+#             )
+#         ]])
+#     )
+
+
+@reject_if_private_chat
 async def handle_menu_add_me(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle add me menu button press."""
+    logger.debug("handle_menu_add_me() called")
     if not update.callback_query:
+        logger.debug("No callback query found")
         return
 
     await update.callback_query.answer()
@@ -839,10 +857,10 @@ async def handle_menu_add_me(
     # Show success message and back button
     await update.callback_query.edit_message_text(
         with_emoji(
-            ":white_check_mark: *Registration Complete*\n\n"
+            "<b>:white_check_mark: Registration Complete</b>\n\n"
             "Your information has been added/updated successfully!"
         ),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton(
                 text=with_emoji(":left_arrow: Back to Menu"),
@@ -850,8 +868,10 @@ async def handle_menu_add_me(
             )
         ]])
     )
+    return
 
 
+@reject_if_private_chat
 async def handle_menu_callback(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all menu-related callback queries."""
@@ -863,11 +883,17 @@ async def handle_menu_callback(
 
     if query.data == "menu_rankings":
         await handle_menu_rankings(update, context)
-    elif query.data == "menu_start_session":
-        await handle_menu_start_session(update, context)
-    elif query.data == "menu_end_session":
-        await handle_menu_end_session(update, context)
+    # elif query.data == "menu_start_session":
+    #     await handle_menu_start_session(update, context)
+    # elif query.data == "menu_end_session":
+    #     await handle_menu_end_session(update, context)
     elif query.data == "menu_add_me":
+        logger.debug("menu_add_me callback received")
         await handle_menu_add_me(update, context)
     elif query.data == "menu_back":
+        logger.debug("menu_back callback received")
         await show_menu(update, context)
+    elif query.data == "menu_help":
+        logger.debug("menu_help callback received")
+        await help_command(update, context)
+    return
