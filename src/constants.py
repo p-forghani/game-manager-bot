@@ -1,0 +1,4 @@
+# Define conversation states
+WAITING_FOR_DATE = 1
+WAITING_FOR_WINNER = 2
+WAITING_FOR_LOSER = 3
