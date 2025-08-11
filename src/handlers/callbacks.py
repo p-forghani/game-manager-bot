@@ -1,4 +1,5 @@
 import os
+import re
 import traceback
 from datetime import date, datetime
 
@@ -59,8 +60,10 @@ async def error_handler(
 async def handle_delete_button(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the button press to delete a game."""
+    logger.debug("handle_delete_button() called")
     query = update.callback_query
     if not query or not query.message or not query.data:
+        logger.debug("No callback query or message or data found")
         return
     await query.answer()
     chat_id = query.message.chat_id
@@ -70,31 +73,63 @@ async def handle_delete_button(
     game = session.query(Game).filter_by(id=game_id, chat_id=chat_id).first()
 
     if not game:
-        await query.edit_message_text(with_emoji(":x: Game not found."))
+        # This is the case when user click on a previous message keyboard
+        # to delete a game that is already deleted
+        await query.message.reply_text(
+            with_emoji(f":x: Game ID {game_id} not found or deleted."))
+        session.close()
         return
 
     session.delete(game)
     session.commit()
+
     if not query.message.text:
+        logger.debug("No message text found")
         session.close()
         return
-    message_text = query.message.text
-    lines = message_text.split("\n")
+
+    # Reconstruct the message with strikethrough for deleted game
+    # Mark the deleted game with <s> and renumber only non-strikethrough lines
+    lines = query.message.text.splitlines()
+    new_lines = []
+    not_deleted_counter = 1
+    # FUTURE: Check if it is better to change the line on the lines
+    # list instead of creating a new list
     for line in lines:
-        if f"Game ID {game_id}:" in line:
-            line = f"<s>{line}</s>"
-    message_text = "\n".join(lines)
+        if f"Game ID {game_id}" in line:
+            # Remove the number prefix (e.g., "1. ", "2. ") and add strikethrough
+            clean_line = re.sub(r'^\d+\.\s*', '', line)
+            new_lines.append(f"<s>{clean_line}</s>")
+        # If line is previously strikethrough, keep it as is
+        elif line.startswith("Game ID"):
+            new_lines.append(f"<s>{line}</s>")
+        # If line is a game line, renumber it
+        elif re.match(r'^\d+\.\s*Game ID', line):
+            clean_line = re.sub(r'^\d+\.\s*', '', line)
+            new_lines.append(f"{not_deleted_counter}. {clean_line}")
+            not_deleted_counter += 1
+    message_text = "\n".join(new_lines)
+    logger.debug(f"Message text: {message_text}")
+
+    # Remove the delete button for the deleted game
     if not query.message.reply_markup:
         keyboard = []
     else:
         keyboard = query.message.reply_markup.inline_keyboard
         keyboard = [
-            [button for button in row if button.callback_data != f"delete_game_{game_id}"]
+            [button for button in row
+             if button.callback_data != f"delete_game_{game_id}"]
             for row in keyboard
         ]
         keyboard = [row for row in keyboard if row]
-    await query.edit_message_text(message_text, reply_markup=InlineKeyboardMarkup(keyboard))
-    # await query.edit_message_text(with_emoji(f":wastebasket: Game {game_id} deleted."))
+
+    # Edit the message with HTML parse mode to show strikethrough
+    await query.edit_message_text(
+        message_text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None
+    )
+
     session.close()
     return
 
@@ -238,105 +273,96 @@ async def show_rankings_for_date(
         context: ContextTypes.DEFAULT_TYPE,
         date: date):
     """Display rankings for a specific date."""
+    # Calculate rankings
+    if update.effective_chat:
+        chat_id = update.effective_chat.id
+    else:
+        return
+
     session = SessionLocal()
-    try:
-        # Calculate rankings
-        if update.effective_chat:
-            chat_id = update.effective_chat.id
-        else:
-            return
+    rankings = calculate_ranking(session, chat_id, date)
+    logger.debug(f"Rankings: {rankings}")
 
-        rankings = calculate_ranking(session, chat_id, date)
-        logger.info(f"Rankings: {rankings}")
+    if not rankings:
+        rankings_text = with_emoji(
+            f":calendar: <b>Rankings for {date.strftime('%Y-%m-%d')}</b>\n\n"
+            "No games played on this date in this chat."
+        )
+    else:
+        rankings_text = with_emoji(
+            f":calendar: <b>Rankings for {date.strftime('%Y-%m-%d')}</b>\n\n"
+        )
+        rankings_text += generate_rankings_text(rankings)
 
-        if not rankings:
-            rankings_text = with_emoji(
-                f":calendar: <b>Rankings for {date.strftime('%Y-%m-%d')}</b>\n\n"
-                "No games played on this date in this chat."
-            )
-        else:
-            rankings_text = with_emoji(
-                f":calendar: <b>Rankings for {date.strftime('%Y-%m-%d')}</b>\n\n"
-            )
-            rankings_text += generate_rankings_text(rankings)
+    # Add back button
+    keyboard = [[
+        InlineKeyboardButton(
+            text=with_emoji(":left_arrow: Back to Rankings"),
+            callback_data="menu_rankings"
+        )
+    ]]
 
-        # Add back button
-        keyboard = [[
-            InlineKeyboardButton(
-                text=with_emoji(":left_arrow: Back to Rankings"),
-                callback_data="menu_rankings"
-            )
-        ]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-        reply_markup = InlineKeyboardMarkup(keyboard)
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            rankings_text,
+            parse_mode="HTML",
+            reply_markup=reply_markup
+        )
+    elif update.message:
+        await update.message.reply_text(
+            rankings_text,
+            parse_mode="HTML",
+            reply_markup=reply_markup
+        )
 
-        if update.callback_query:
-            await update.callback_query.edit_message_text(
-                rankings_text,
-                parse_mode="HTML",
-                reply_markup=reply_markup
-            )
-        elif update.message:
-            await update.message.reply_text(
-                rankings_text,
-                parse_mode="HTML",
-                reply_markup=reply_markup
-            )
-
-    finally:
-        session.close()
+    session.close()
     return
 
 @reject_if_private_chat
 async def show_rankings_all_time(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Display all-time rankings."""
+    # Calculate rankings
+    if update.effective_chat:
+        chat_id = update.effective_chat.id
+    else:
+        return
+
     session = SessionLocal()
-    try:
-        # Calculate rankings
-        if update.effective_chat:
-            chat_id = update.effective_chat.id
-        else:
-            return
+    rankings = calculate_ranking(session, chat_id)
+    logger.debug(f"Rankings: {rankings}")
 
-        rankings = calculate_ranking(session, chat_id)
-        logger.info(f"Rankings: {rankings}")
+    if not rankings:
+        rankings_text = with_emoji(
+            ":no_entry: No games have been played yet in this chat."
+        )
+    else:
+        rankings_text = with_emoji(
+            ":chart_with_upwards_trend: <b>All-Time Rankings</b>\n\n"
+        )
+        rankings_text += generate_rankings_text(rankings)
 
-        if not rankings:
-            rankings_text = with_emoji(
-                "No games have been played yet in this chat."
-            )
-        else:
-            rankings_text = with_emoji(
-                ":chart_with_upwards_trend: <b>All-Time Rankings</b>\n\n"
-            )
-            rankings_text += generate_rankings_text(rankings)
+    # Add back button
+    keyboard = [[
+        InlineKeyboardButton(
+            text=with_emoji(":left_arrow: Back to Rankings"),
+            callback_data="menu_rankings"
+        )
+    ]]
 
-        # Add back button
-        keyboard = [[
-            InlineKeyboardButton(
-                text=with_emoji(":left_arrow: Back to Rankings"),
-                callback_data="menu_rankings"
-            )
-        ]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-        reply_markup = InlineKeyboardMarkup(keyboard)
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            rankings_text,
+            parse_mode="HTML",
+            reply_markup=reply_markup
+        )
 
-        if update.callback_query:
-            await update.callback_query.edit_message_text(
-                rankings_text,
-                parse_mode="HTML",
-                reply_markup=reply_markup
-            )
-        elif update.message:
-            await update.message.reply_text(
-                rankings_text,
-                parse_mode="HTML",
-                reply_markup=reply_markup
-            )
-
-    finally:
-        session.close()
+    session.close()
+    return
 
 
 # async def handle_menu_start_session(

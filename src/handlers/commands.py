@@ -1,4 +1,5 @@
 import re
+from src.functions import generate_rankings_text
 from datetime import datetime
 
 import pytz
@@ -114,7 +115,9 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if (
         context.args
         and len(context.args) > 3
+        and context.args[-1].lower().startswith("date=")
     ):
+
         if re.match(pattern, context.args[-1].lower(), re.IGNORECASE):
             game_date = datetime.strptime(
                 context.args[-1].split("=")[1], "%Y-%m-%d").date()
@@ -260,22 +263,13 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     rankings = calculate_ranking(session, chat_id, date)
 
-    players_with_ratio = sorted(
-        [
-            (p, r)
-            for p, r in rankings
-            if r is not None  # Only include players with valid win ratios
-        ],
-        key=lambda x: x[1],
-        reverse=True
-    )
-
-    if len(players_with_ratio) == 0:
+    if not rankings:
         await update.message.reply_text(
             with_emoji(":no_entry: No games played yet in this chat.")
         )
         session.close()
         return
+
 
     if date:
         ranking_message = with_emoji(
@@ -283,19 +277,8 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         ranking_message = with_emoji(
             ":trophy: <b>All-Time Champions Are Here!</b> :sparkles:\n\n")
-    # sample player = (Player object, score)
 
-    for idx, (player, score) in enumerate(players_with_ratio, start=1):
-        medals = [
-            ":1st_place_medal:",
-            ":2nd_place_medal:",
-            ":3rd_place_medal:",
-        ]
-        medal = with_emoji(medals[idx-1] if idx <= 3 else ":dart:")
-        ranking_message += with_emoji(
-            f"{medal} <b>{idx}. {player.first_name}</b> "
-            f"— <i>Win Ratio:</i> {score * 100:.0f}%\n"
-        )
+    ranking_message += generate_rankings_text(rankings)
 
     ranking_message += with_emoji(
         "\n\n:rocket: <b>Let's keep the games rolling!</b>")
@@ -304,6 +287,7 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return
 
 
+@reject_if_private_chat
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show the main menu with inline keyboard buttons."""
     logger.debug("show_menu() called")
@@ -362,6 +346,7 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return
 
 
+@reject_if_private_chat
 async def handle_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Log all attributes of the context object for debugging
     if context.args:
@@ -405,6 +390,8 @@ async def handle_games_command(update: Update, context: ContextTypes.DEFAULT_TYP
         chat_id=update.effective_chat.id,
         game_date=date
     )
+    logger.debug(f"Games message: {games_message}")
+    logger.debug(f"Games keyboard: {games_keyboard}")
     if not games_message:
         await update.message.reply_text(
             with_emoji(":no_entry: No games played on this date in this chat.")

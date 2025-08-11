@@ -3,7 +3,7 @@ import logging
 # Configure logger
 logging.basicConfig(
     # filename='logs.log',
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(filename)s - Ln: %(lineno)d - %(message)s',
     level=logging.DEBUG
 )
 

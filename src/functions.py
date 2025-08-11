@@ -11,6 +11,19 @@ from src.utils import with_emoji
 
 
 def calculate_ranking(session, chat_id, date=None):
+    """
+    Calculate the ranking of players in a chat.
+
+    Args:
+        session: SQLAlchemy session
+        chat_id: Chat ID to filter games by
+        date: Date to filter games by
+
+    Returns:
+        List of tuples containing player objects and their win ratios
+    """
+    # FUTURE: This is a very inefficient way to calculate the ranking.
+
     # Subquery for wins
     win_query = session.query(
         Game.winner_id.label("player_id"),
@@ -43,7 +56,16 @@ def calculate_ranking(session, chat_id, date=None):
         win_query, Player.id == win_query.c.player_id
         ).outerjoin(loss_query, Player.id == loss_query.c.player_id)
 
-    return query.all()
+    result = query.all()
+    # FUTURE: The list type is inefficient.
+    # Filter out players with None win_ratio
+    filtered_result = [(player, win_ratio) for player, win_ratio in result
+                      if win_ratio is not None]
+
+    # Sort by win_ratio in descending order (highest first)
+    filtered_result.sort(key=lambda x: x[1], reverse=True)
+
+    return filtered_result
 
 
 def generate_rankings_text(rankings):
@@ -52,16 +74,17 @@ def generate_rankings_text(rankings):
         if not player:
             continue
         MEDALS = {
-            1: ':first_place_medal:',
-            2: ':second_place_medal:',
-            3: ':third_place_medal:',
+            1: ':1st_place_medal:',
+            2: ':2nd_place_medal:',
+            3: ':3rd_place_medal:',
         }
         if i in MEDALS:
             rankings_text += f"{MEDALS[i]} "
         if win_ratio is not None:
-            rankings_text += f"{i}. {player.first_name} - {win_ratio * 100:.0f}%\n"
+            rankings_text += f"{i}. {player.first_name} - Win Ratio: {win_ratio * 100:.0f}%\n"
         else:
             rankings_text += f"{i}. {player.first_name} - No games played\n"
+    logger.debug(f"Rankings text: {with_emoji(rankings_text)}")
     return with_emoji(rankings_text)
 
 

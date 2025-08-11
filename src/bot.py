@@ -10,7 +10,7 @@ from src.handlers.callbacks import (error_handler, handle_date_input,
                                     handle_delete_button, handle_menu_callback,
                                     handle_rank_callback)
 from src.handlers.commands import (add_me, handle_test_command, help_command,
-                                   played, ranking, show_menu, start)
+                                   played, ranking, show_menu, start, handle_games_command)
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
@@ -26,6 +26,7 @@ def app_factory(token=TOKEN):
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("played", played))
+    app.add_handler(CommandHandler("games", handle_games_command))
     app.add_handler(CommandHandler("add_me", add_me))
     app.add_handler(CommandHandler("rank", ranking))
     app.add_handler(CommandHandler("menu", show_menu))
@@ -33,11 +34,11 @@ def app_factory(token=TOKEN):
 
     # Callback query handlers
     app.add_handler(CallbackQueryHandler(
-        handle_delete_button, pattern="^delete_game:"))
-    app.add_handler(CallbackQueryHandler(
         handle_menu_callback, pattern="^menu_"))
     app.add_handler(CallbackQueryHandler(
         handle_rank_callback, pattern="^rank_"))
+    app.add_handler(CallbackQueryHandler(
+        handle_delete_button, pattern="^delete_game_"))
     # Uncomment These lines when the session is ready
     # app.add_handler(CallbackQueryHandler(
     #     handle_session_winner, pattern="^session_winner_"))
