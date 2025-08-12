@@ -18,6 +18,7 @@ from src.utils import with_emoji
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.debug("start() called")
     if not update.message:
         return
     await update.message.reply_text(
@@ -45,6 +46,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @reject_if_private_chat
 async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.debug("played() called")
     session = SessionLocal()
 
     if not update.message:
@@ -180,6 +182,7 @@ async def played(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @reject_if_private_chat
 async def add_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.debug("add_me() called")
     user = update.effective_user
     if not update.message:
         return
@@ -208,6 +211,7 @@ async def add_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.rollback()
         finally:
             session.close()
+            return
 
     player = Player(
         telegram_id=user.id,
@@ -237,6 +241,7 @@ async def add_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @reject_if_private_chat
 async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.debug("ranking() called")
     if not update.message:
         return
     session = SessionLocal()
@@ -318,7 +323,7 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(
             text=with_emoji(":question: Help"),
             callback_data="menu_help"
-        )]
+        )],
     ]
 
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -348,6 +353,7 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @reject_if_private_chat
 async def handle_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.debug("handle_test_command() called")
     # Log all attributes of the context object for debugging
     if context.args:
         logger.debug("\n".join([arg for arg in context.args]))
@@ -358,6 +364,7 @@ async def handle_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 @reject_if_private_chat
 async def handle_games_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.debug("handle_games_command() called")
     """If date is provided, show the games for that date,
     otherwise show all games played on that chat today."""
     if not update.message:
@@ -407,5 +414,35 @@ async def handle_games_command(update: Update, context: ContextTypes.DEFAULT_TYP
         parse_mode="HTML",
         reply_markup=games_keyboard if games_keyboard else None
     )
+    session.close()
+    return
+
+
+@reject_if_private_chat
+async def handle_delete_game_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.debug("handle_delete_game_command() called")
+    """Handle delete game command."""
+    if not update.message:
+        return
+    if not context.args:
+        await update.message.reply_text(
+            with_emoji(":x: Please provide a game ID."))
+        return
+    game_id = context.args[0]
+    if not game_id.isdigit():
+        await update.message.reply_text(
+            with_emoji(":x: Invalid game ID."))
+        return
+    session = SessionLocal()
+    game = session.query(Game).filter_by(id=game_id).first()
+    if not game:
+        await update.message.reply_text(
+            with_emoji(f":x: Game ID {game_id} not found."))
+        return
+    game.deleted_at = datetime.now()  # type: ignore
+    session.add(game)
+    session.commit()
+    await update.message.reply_text(with_emoji(f":wastebasket: Game {game_id} deleted."))
+    # FUTURE: Add an undo button to restore the game
     session.close()
     return

@@ -9,8 +9,10 @@ from src.constants import WAITING_FOR_DATE
 from src.handlers.callbacks import (error_handler, handle_date_input,
                                     handle_delete_button, handle_menu_callback,
                                     handle_rank_callback)
-from src.handlers.commands import (add_me, handle_test_command, help_command,
-                                   played, ranking, show_menu, start, handle_games_command)
+from src.handlers.commands import (add_me, handle_delete_game_command,
+                                   handle_games_command, handle_test_command,
+                                   help_command, played, ranking, show_menu,
+                                   start)
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
@@ -31,12 +33,16 @@ def app_factory(token=TOKEN):
     app.add_handler(CommandHandler("rank", ranking))
     app.add_handler(CommandHandler("menu", show_menu))
     app.add_handler(CommandHandler("test", handle_test_command))
+    app.add_handler(CommandHandler("delete_game", handle_delete_game_command))
 
     # Callback query handlers
     app.add_handler(CallbackQueryHandler(
         handle_menu_callback, pattern="^menu_"))
+
+    # Handle immediate ranking responses (rank_today, rank_all_time, menu_back)
     app.add_handler(CallbackQueryHandler(
-        handle_rank_callback, pattern="^rank_"))
+        handle_rank_callback, pattern="^(rank_today|rank_all_time|menu_back)$"))
+
     app.add_handler(CallbackQueryHandler(
         handle_delete_button, pattern="^delete_game_"))
     # Uncomment These lines when the session is ready
@@ -51,10 +57,11 @@ def app_factory(token=TOKEN):
     # app.add_handler(CallbackQueryHandler(
     #     handle_session_cancel_game, pattern="^session_cancel_game$"))
 
-    # Conversation handler for date input
+    # Conversation handler ONLY for date input conversation
+    # This handles: rank_enter_date (starts conversation) and rank_cancel (ends conversation)
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(
-            handle_rank_callback, pattern="^rank_enter_date$")],
+            handle_rank_callback, pattern="^rank_enter_date$")],  # Only date input starts conversation
         states={
             WAITING_FOR_DATE: [MessageHandler(
                 filters.TEXT & ~filters.COMMAND, handle_date_input)]

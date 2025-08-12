@@ -1,6 +1,6 @@
 import datetime
 
-from sqlalchemy import (Column, Date, ForeignKey, Integer, String)
+from sqlalchemy import (Column, Date, DateTime, ForeignKey, Integer, String)
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -36,6 +36,7 @@ class Game(Base):
     # TODO: Remove the default arg from the date
     date = Column(Date, default=datetime.date.today)
     chat_id = Column(Integer, nullable=False)
+    deleted_at = Column(DateTime, nullable=True)
 
     # Set up relationships so we can do game.winner or player.games_won
     winner = relationship(

@@ -24,20 +24,26 @@ def calculate_ranking(session, chat_id, date=None):
     """
     # FUTURE: This is a very inefficient way to calculate the ranking.
 
-    # Subquery for wins
+    # Subquery for wins (excluding deleted games)
     win_query = session.query(
         Game.winner_id.label("player_id"),
         func.count(Game.id).label("wins")
-    ).filter(Game.chat_id == chat_id)
+    ).filter(
+        Game.chat_id == chat_id,
+        Game.deleted_at.is_(None)  # Only count non-deleted games
+    )
     if date:
         win_query = win_query.filter(Game.date == date)
     win_query = win_query.group_by(Game.winner_id).subquery()
 
-    # Subquery for losses
+    # Subquery for losses (excluding deleted games)
     loss_query = session.query(
         Game.loser_id.label("player_id"),
         func.count(Game.id).label("losses")
-    ).filter(Game.chat_id == chat_id)
+    ).filter(
+        Game.chat_id == chat_id,
+        Game.deleted_at.is_(None)  # Only count non-deleted games
+    )
     if date:
         loss_query = loss_query.filter(Game.date == date)
     loss_query = loss_query.group_by(Game.loser_id).subquery()
@@ -135,7 +141,8 @@ def generate_games_history_message(
 
     games = session.query(Game).filter(
         Game.date == game_date,
-        Game.chat_id == chat_id
+        Game.chat_id == chat_id,
+        Game.deleted_at.is_(None)  # Only show non-deleted games
     ).all()
 
     if not games:

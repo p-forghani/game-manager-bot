@@ -14,11 +14,13 @@ from src.handlers.commands import add_me, help_command, show_menu
 from src.logging_config import logger
 from src.models import Game
 from src.utils import with_emoji
+from src.templates import HELP_MESSAGE
 
 
 async def error_handler(
         update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle errors and log exception details."""
+    logger.debug("error_handler() called")
     logger.error("Exception occurred:", exc_info=context.error)
 
     if isinstance(update, Update) and getattr(update, "message", None):
@@ -76,11 +78,12 @@ async def handle_delete_button(
         # This is the case when user click on a previous message keyboard
         # to delete a game that is already deleted
         await query.message.reply_text(
-            with_emoji(f":x: Game ID {game_id} not found or deleted."))
+            with_emoji(f":x: Game ID {game_id} not found or already deleted."))
         session.close()
         return
 
-    session.delete(game)
+    game.deleted_at = datetime.now()  # type: ignore
+    session.add(game)
     session.commit()
 
     if not query.message.text:
@@ -108,8 +111,9 @@ async def handle_delete_button(
             clean_line = re.sub(r'^\d+\.\s*', '', line)
             new_lines.append(f"{not_deleted_counter}. {clean_line}")
             not_deleted_counter += 1
+        else:
+            new_lines.append(line)
     message_text = "\n".join(new_lines)
-    logger.debug(f"Message text: {message_text}")
 
     # Remove the delete button for the deleted game
     if not query.message.reply_markup:
@@ -138,6 +142,7 @@ async def handle_delete_button(
 async def handle_menu_rankings(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle rankings menu button press."""
+    logger.debug("handle_menu_rankings() called")
     if not update.callback_query:
         return
 
@@ -180,7 +185,17 @@ async def handle_menu_rankings(
 @reject_if_private_chat
 async def handle_rank_callback(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle ranking-related callback queries."""
+    """Handle ranking-related callback queries.
+
+    Handler Assignment:
+    - CallbackQueryHandler handles: rank_today, rank_all_time, menu_back (immediate responses)
+    - ConversationHandler handles: rank_enter_date (starts conversation), rank_cancel (ends conversation)
+
+    Conversation State Management:
+    - rank_enter_date: Start conversation (WAITING_FOR_DATE state)
+    - rank_cancel: End conversation (clear any existing state)
+    """
+    logger.debug("handle_rank_callback() called")
     query = update.callback_query
     if not query or not query.data:
         return
@@ -212,6 +227,7 @@ async def handle_rank_callback(
         # Set conversation state to wait for date input
         if context.user_data is not None:
             context.user_data['waiting_for_date'] = True
+            logger.debug("Setting conversation state to wait for date input")
         return WAITING_FOR_DATE
     elif query.data == "rank_cancel":
         # Cancel date input and go back to rankings menu
@@ -222,12 +238,13 @@ async def handle_rank_callback(
     elif query.data == "menu_back":
         # Go back to main menu
         await show_menu(update, context)
-        return ConversationHandler.END
+        # No return needed - handled by CallbackQueryHandler
 
 @reject_if_private_chat
 async def handle_date_input(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle text message containing date input for rankings."""
+    logger.debug("handle_date_input() called")
     if not update.message or not update.message.text:
         return ConversationHandler.END
 
@@ -273,6 +290,7 @@ async def show_rankings_for_date(
         context: ContextTypes.DEFAULT_TYPE,
         date: date):
     """Display rankings for a specific date."""
+    logger.debug("show_rankings_for_date() called")
     # Calculate rankings
     if update.effective_chat:
         chat_id = update.effective_chat.id
@@ -324,6 +342,7 @@ async def show_rankings_for_date(
 async def show_rankings_all_time(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Display all-time rankings."""
+    logger.debug("show_rankings_all_time() called")
     # Calculate rankings
     if update.effective_chat:
         chat_id = update.effective_chat.id
@@ -896,11 +915,33 @@ async def handle_menu_add_me(
     )
     return
 
+@reject_if_private_chat
+async def handle_menu_help(
+        update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle help menu button press."""
+    logger.debug("handle_menu_help() called")
+    if not update.callback_query:
+        logger.debug("No callback query found")
+        return
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text(
+        with_emoji(HELP_MESSAGE),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                text=with_emoji(":left_arrow: Back to Menu"),
+                callback_data="menu_back"
+            )
+        ]])
+    )
+    return
+
 
 @reject_if_private_chat
 async def handle_menu_callback(
         update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all menu-related callback queries."""
+    logger.debug("handle_menu_callback() called")
     query = update.callback_query
     if not query or not query.data:
         return
@@ -921,5 +962,5 @@ async def handle_menu_callback(
         await show_menu(update, context)
     elif query.data == "menu_help":
         logger.debug("menu_help callback received")
-        await help_command(update, context)
+        await handle_menu_help(update, context)
     return
