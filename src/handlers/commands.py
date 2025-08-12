@@ -299,8 +299,9 @@ async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     menu_text = with_emoji(
         ":game_die: <b>Game Manager Menu</b>\n\n"
-        "Choose an option from the menu below:"
-        "Or Use /played to record a game; and /games to see the games history."
+        "Choose an option from the menu below OR use\n"
+        "<code>/played [date=yyyy-mm-dd]</code> to record a game;\n"
+        "<code>/games [date=yyyy-mm-dd]</code> to see the games history."
     )
 
     keyboard = [
