@@ -2,13 +2,18 @@ import logging
 
 # Configure logger
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    filename='logs.log',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(filename)s - Ln: %(lineno)d - %(message)s',
     level=logging.INFO
 )
 
 logger = logging.getLogger(__name__)
 
-logging.basicConfig(level=logging.INFO)
+# Set httpx logger to WARNING or higher
+logging.getLogger('httpx').setLevel(logging.WARNING)
 
-# Mute Telegram bot's logging
-logging.getLogger("httpx").setLevel(logging.WARNING)
+# Mute specific libraries
+# logging.getLogger("httpcore").setLevel(logging.WARNING)
+# logging.getLogger("httpx").setLevel(logging.WARNING)
+# logging.getLogger("telegram").setLevel(logging.INFO)
+# logging.getLogger("telegram.ext").setLevel(logging.INFO)
